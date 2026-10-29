@@ -1,0 +1,168 @@
+{
+  "name": "Control de juego - solicitudes al tutor",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Pedido del teléfono",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "solicitud",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "2",
+      "name": "Asistente analiza",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 400, system: 'Ayudás a tutores de una persona con adicción al juego. Te llega un pedido del teléfono de esa persona para instalar una app, abrir un sitio o usar una app por un tiempo. Respondé solo con JSON: {\"categoria\": \"apuestas\" | \"finanzas\" | \"cripto\" | \"prestamos\" | \"otro\", \"riesgo\": \"alto\" | \"medio\" | \"bajo\", \"resumen\": \"una o dos frases en castellano para el tutor\"}. Categoria apuestas incluye casinos, apuestas deportivas, póker, tragamonedas, loterías online y juegos con premios en dinero.', messages: [{ role: 'user', content: 'Tipo: ' + $json.body.tipo + '\\nNombre: ' + $json.body.nombre + '\\nMotivo que escribió la persona: ' + ($json.body.motivo || 'sin motivo') + '\\nMinutos pedidos: ' + ($json.body.minutos || 'no aplica') }] }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "", "name": "Anthropic (x-api-key)" }
+      }
+    },
+    {
+      "id": "3",
+      "name": "Leer respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0],
+      "parameters": {
+        "jsCode": "const pedido = $('Pedido del teléfono').first().json.body;\nlet analisis;\ntry {\n  const texto = $input.first().json.content[0].text;\n  analisis = JSON.parse(texto.slice(texto.indexOf('{'), texto.lastIndexOf('}') + 1));\n} catch (e) {\n  // Si el asistente falla, el pedido igual va al tutor, marcado para mirar.\n  analisis = { categoria: 'otro', riesgo: 'alto', resumen: 'El asistente no pudo analizar este pedido. Revisalo con cuidado.' };\n}\nreturn [{ json: { ...pedido, ...analisis } }];"
+      }
+    },
+    {
+      "id": "4",
+      "name": "¿Es de apuestas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.categoria }}",
+              "rightValue": "apuestas",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5",
+      "name": "Responder: rechazado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, -160],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ estado: 'rechazado', motivo: 'Está relacionado con apuestas.' }) }}"
+      }
+    },
+    {
+      "id": "6",
+      "name": "Responder: enviado al tutor",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 120],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ estado: 'enviado', mensaje: 'Tu pedido le llegó al tutor.' }) }}"
+      }
+    },
+    {
+      "id": "7",
+      "name": "Preguntar al tutor",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1200, 120],
+      "parameters": {
+        "operation": "sendAndWait",
+        "chatId": "={{ $env.TUTOR_CHAT_ID }}",
+        "message": "={{ 'Nuevo pedido (' + $('Leer respuesta').first().json.tipo + '): ' + $('Leer respuesta').first().json.nombre + '\\nRiesgo: ' + $('Leer respuesta').first().json.riesgo + '\\n' + $('Leer respuesta').first().json.resumen }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Aprobar",
+            "disapproveLabel": "Rechazar"
+          }
+        }
+      },
+      "credentials": {
+        "telegramApi": { "id": "", "name": "Telegram del servicio" }
+      }
+    },
+    {
+      "id": "8",
+      "name": "¿Aprobó?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 120],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "9",
+      "name": "Habilitar en el MDM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, 40],
+      "notes": "Pendiente: la dirección y el formato dependen del MDM que se elija (Scalefusion o Hexnode).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MDM_API_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ familia: $('Leer respuesta').first().json.familia_id, tipo: $('Leer respuesta').first().json.tipo, nombre: $('Leer respuesta').first().json.nombre, minutos: $('Leer respuesta').first().json.minutos || null }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Pedido del teléfono": { "main": [[{ "node": "Asistente analiza", "type": "main", "index": 0 }]] },
+    "Asistente analiza": { "main": [[{ "node": "Leer respuesta", "type": "main", "index": 0 }]] },
+    "Leer respuesta": { "main": [[{ "node": "¿Es de apuestas?", "type": "main", "index": 0 }]] },
+    "¿Es de apuestas?": {
+      "main": [
+        [{ "node": "Responder: rechazado", "type": "main", "index": 0 }],
+        [{ "node": "Responder: enviado al tutor", "type": "main", "index": 0 }]
+      ]
+    },
+    "Responder: enviado al tutor": { "main": [[{ "node": "Preguntar al tutor", "type": "main", "index": 0 }]] },
+    "Preguntar al tutor": { "main": [[{ "node": "¿Aprobó?", "type": "main", "index": 0 }]] },
+    "¿Aprobó?": { "main": [[{ "node": "Habilitar en el MDM", "type": "main", "index": 0 }], []] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
